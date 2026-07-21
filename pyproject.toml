@@ -1,0 +1,84 @@
+[project]
+name = "yoink"
+version = "0.0.1"
+description = "Multi-segment HTTP downloader with browser integration. OSS IDM alternative."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Gin (Pirgin Ezra Saputra)", email = "saturn@infjcrypto.com" },
+]
+requires-python = ">=3.12"
+keywords = ["downloader", "idm", "http", "multi-segment", "resume", "browser-extension"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: System :: Networking",
+]
+dependencies = [
+    "httpx[http2]>=0.27.0",
+    "anyio>=4.4.0",
+    "typer>=0.12.5",
+    "rich>=13.7.1",
+    "tomli>=2.0.1; python_version < '3.11'",
+    "click>=8.1.7",
+]
+
+[project.optional-dependencies]
+media = [
+    "yt-dlp>=2024.8.6",
+]
+dev = [
+    "pytest>=8.3.2",
+    "pytest-asyncio>=0.23.8",
+    "pytest-cov>=5.0.0",
+    "respx>=0.21.1",
+    "ruff>=0.6.3",
+    "mypy>=1.11.2",
+]
+
+[project.scripts]
+yoink = "yoink.cli.main:app"
+
+[project.urls]
+Homepage = "https://github.com/saturninfj/yoink"
+Repository = "https://github.com/saturninfj/yoink"
+Documentation = "https://github.com/saturninfj/yoink#readme"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["yoink"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "B", "UP", "ASYNC", "S", "PL"]
+ignore = ["E501", "PLR0913", "S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "PLR2004"]
+"scripts/**" = ["S101"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers --cov=yoink --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["yoink"]
+branch = true
