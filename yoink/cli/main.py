@@ -1,4 +1,5 @@
 """CLI entrypoint via typer."""
+
 from __future__ import annotations
 
 import typer
@@ -15,11 +16,23 @@ app = typer.Typer(
 console = Console()
 
 
-@app.command()
-def version() -> None:
-    """Print yoink version."""
-    console.print(f"yoink {__version__}")
+@app.callback(invoke_without_command=True)
+def _main(
+    ctx: typer.Context,
+    version_flag: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        help="Print yoink version and exit.",
+        is_eager=True,
+    ),
+) -> None:
+    if version_flag or ctx.invoked_subcommand is None:
+        console.print(f"yoink {__version__}")
+        raise typer.Exit()
 
 
-if __name__ == "__main__":
-    app()
+# Register commands (side-effect imports)
+from yoink.cli.commands import download  # noqa: E402
+
+app.command()(download)
