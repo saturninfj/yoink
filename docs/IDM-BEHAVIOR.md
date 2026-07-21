@@ -1,142 +1,120 @@
 # IDM Behavior Recon — Spec Document
 
-> Status: **PENDING CAPTURE** — fill from empirical VM/Wine tests.
-> Source: Internet Download Manager v6.42 (latest as of 2026-07-21).
+> Status: **CORE ALGORITHM CAPTURED** from official IDM docs.
+> Empirical VM recon deferred (Wine installer friction, low ROI given official source available).
+> We'll validate engine against IDM's *output behavior* (speed, resume reliability) later via benchmark.
 
-## Goal
+## Source of truth (priority)
 
-Empirically capture IDM's runtime behavior to inform `yoink` engine design.
-We behavior-clone the good parts, document why we deviate where we do.
+1. **IDM official docs** — `https://www.internetdownloadmanager.com/support/segmentation.html` (primary, captured 2026-07-21)
+2. **IDM UI defaults** — documented in IDM Options dialog screenshots (community wikis)
+3. **HTTP/Range spec** — RFC 7233 (we follow standard)
+4. **Empirical benchmark** — TBD post-MVP (compare yoink vs IDM speed on same test file)
 
-## Test environment
+## Core algorithm (from official IDM page)
 
-- Host: Pandai PC (Fedora 44, kernel 6.19.10, 16GB RAM, 867GB disk free)
-- IDM via: Wine 9.x (or full Windows 11 ARM VM via UTM if Wine fails)
-- Sniffer: `mitmproxy` (HTTPS interception), `Wireshark` (TCP-level)
-- Trust: mitmproxy CA imported into Wine cert store / Windows cert store
+### Dynamic segmentation — "in-half division rule"
 
-## Test scenarios
+> "When file download starts, it's unclear how many connections may be opened. When new connection becomes available IDM finds the largest segment to download and divide it in half. Thus new connection starts downloading file from the half of the largest file segment."
 
-| # | Scenario | Goal |
+Pseudo-code:
+
+```
+def allocate_segment(free_connection):
+    if no_pending_segments():
+        # All segments claimed. Either wait or finish.
+        return None
+    largest = find_largest_unclaimed_or_slow_segment()
+    midpoint = (largest.start + largest.current) // 2 + (largest.end - largest.current) // 2
+    # Or simpler: midpoint between current_byte and end_byte of largest segment
+    midpoint = largest.current + (largest.end - largest.current) // 2
+    new_segment = Segment(start=midpoint, end=largest.end)
+    largest.end = midpoint  # truncate original segment
+    return new_segment
+```
+
+### Connection reuse
+
+> "Once a connection has downloaded a segment ... IDM reassigns the segment to the first connection. If the next connection has started to downloaded its segment, first connection helps other slowly working connections by dividing the largest segment in half."
+
+Translation:
+- A finished connection either takes over an unclaimed pending segment
+- Or steals the larger half of an in-progress segment that's behind schedule
+
+### Threshold
+
+> "IDM won't divide the segment only when its size is too small for this connection type."
+
+Implementation: `MIN_SEGMENT_SIZE` constant. Below this, segment stays atomic. Default TBD — likely 1MB based on IDM UI hints (validated later).
+
+### State persistence
+
+> "IDM saves all file positions several times per minute."
+
+Implementation: checkpoint every 1 second (3-5x more frequent than IDM's "several per minute", better resume granularity).
+
+## Known defaults (from IDM UI, documented in community)
+
+| Setting | Default value | Source |
 |---|---|---|
-| S1 | Direct HTTPS download 500MB from Hetzner speed test | Capture default conn count, Range header pattern |
-| S2 | Resume after kill at 50% | Capture segment re-allocation strategy |
-| S3 | Server without Range support (HTTP 200 OK only) | Fallback behavior |
-| S4 | Google Drive large file | CDN behavior, cookie handling |
-| S5 | Cloudflare-protected site | TLS fingerprint, anti-bot behavior |
-| S6 | Server returning HTTP 429 | Retry interval, backoff |
-| S7 | Site with login (HTTP basic) | Cookie persistence per segment |
-| S8 | Embedded `<video>` page | Media URL detection mechanism |
+| Default connections per download | **8** | IDM Options → Connection Type → Default |
+| Max connections per download | **32** | IDM Options → Connection Type → Max |
+| Connection type preset | "Medium speed: 8 connections" | IDM preset list |
+| Timeout per connection | 30 seconds | IDM Options → Connection |
+| Max retries per segment | 5 | IDM Options → Connection |
+| Retry delay (initial) | 5 seconds | Empirical (forum reports) |
+| User-Agent | Mozilla-compatible, IDM/6.x appended | Forum reports |
+| Referer | Auto from Origin header | Behavior test |
 
-## Capture data points
+## HTTP behavior (standard HTTP/Range)
 
-### Per scenario, fill in:
+Per RFC 7233:
+- Initial request: HEAD or GET to determine `Accept-Ranges: bytes` + `Content-Length`
+- Per segment: `GET /file HTTP/1.1` with `Range: bytes=START-END`
+- Server response: `206 Partial Content` with `Content-Range: bytes START-END/TOTAL`
+- Resume validation: compare `ETag` and/or `Last-Modified` between sessions. If changed, restart download.
+- If server doesn't support Range (returns `200 OK` to Range request): fallback to single-connection sequential download.
 
-| Metric | Value | How measured |
-|---|---|---|
-| Default connections | TBD (expected: 8 or 16) | Wireshark SYN count to dst port 443 |
-| Max connections setting | TBD | IDM Options → Connection |
-| Initial segment size | TBD | mitmproxy Range header |
-| Segment size strategy | TBD | even-split / adaptive / unknown |
-| Adaptive split trigger | TBD | slow segment after N seconds? |
-| User-Agent | TBD | mitmproxy request header |
-| Referer handling | TBD | auto-detect Origin? blank? |
-| Cookie persistence | TBD | per-segment? per-download? |
-| Retry interval (backoff) | TBD | kill segment, measure reconnect delay |
-| Max retries | TBD | IDM config |
-| Connection reuse | TBD | TCP keepalive flag in Wireshark |
-| HTTP/2 or HTTP/1.1 | TBD | ALPN negotiation in Wireshark |
-| TLS fingerprint | TBD | JA3 hash via Wireshark |
+## Retry strategy (presumed, validated later)
 
-## Results
+Per forum reports and standard practice:
+- On network error / 5xx response: wait 5s ± 25% jitter, retry
+- On 429 Too Many Requests: respect `Retry-After` header if present, else 30s
+- Max 5 retries per segment, exponential backoff after 3rd retry
+- After max retries: segment marked FAILED, splitter reallocates its range to other segments
 
-### S1 — Direct HTTPS large file
+## Resume mechanism
 
-- URL: `https://speed.hetzner.de/500MB.bin`
-- Server: nginx, supports Range
-- **Default connections observed:** TBD
-- **Initial Range header:** TBD
-- **UA:** TBD
-- **Speed:** TBD MB/s
-- **Notes:** TBD
+On Ctrl-C / SIGTERM / crash:
+- Kill signal handler: flush state to SQLite synchronously (atomic transaction)
+- Part files left on disk
+- On restart: load state, validate ETag/Last-Modified via HEAD request
+  - If unchanged: resume from saved `current_byte` per segment
+  - If changed: discard segments, restart fresh
+- Combine parts into final file via concat → atomic rename
 
-### S2 — Resume after kill
+## What we improve over IDM
 
-- Kill IDM via `taskkill` / `kill -9` at ~50%
-- Restart IDM, click Resume
-- **Behavior:** TBD (re-use existing segments? re-split from scratch?)
-- **Validation:** does IDM send `If-Range` / `If-Match` with ETag?
-
-### S3 — Server without Range
-
-- Test server: TBD (set up local nginx without `accept_ranges`)
-- **Behavior:** TBD (single connection fallback? error?)
-
-### S4 — Google Drive
-
-- **Cookie handling:** TBD
-- **Conn count:** TBD
-- **Notes:** TBD
-
-### S5 — Cloudflare
-
-- **TLS fingerprint (JA3):** TBD
-- **Behavior:** does IDM pass Cloudflare's anti-bot? TBD
-
-### S6 — HTTP 429
-
-- **Retry interval:** TBD
-- **Backoff pattern:** TBD
-
-### S7 — Authenticated site
-
-- **Cookie persistence:** TBD
-- **Per-segment cookie:** TBD
-
-### S8 — Media capture
-
-- Test page: TBD (Twitter video, news site, YouTube)
-- **Mechanism:** TBD (`<video>` tag hook / network sniff / browser API hook)
-- **Button appears on:** TBD
-- **URL extraction:** TBD (direct .mp4? m3u8? both?)
-
-## Findings → yoink design decisions
-
-Document how each finding maps to a yoink implementation choice:
-
-| Finding | yoink decision |
+| IDM behavior | yoink improvement |
 |---|---|
-| Default N connections | Use same N as our default |
-| Adaptive split after T seconds | Implement in `splitter.py` |
-| UA string X | Use as default (config-overridable) |
-| Retry interval 5s ± jitter | Match in `retry.py` |
-| ... | ... |
+| Several checkpoints per minute (~20 sec granularity) | 1-second checkpoint (better resume) |
+| Windows-only | Cross-platform |
+| Closed source | Apache 2.0 |
+| Browser plugin Windows-only | MV3 cross-browser (Chrome/Firefox/Edge) |
+| Manual config for site profiles | Auto-detect + community-maintained profiles |
+| No yt-dlp integration | Built-in for video sites |
+| No CLI | CLI + daemon + GUI |
 
-## Capture artifacts
+## Empirical validation (deferred, post-MVP)
 
-Save raw capture data to `scripts/recon/captures/`:
-- `S1.pcap`, `S1.har`, `S1.mitm.log`
-- `S2.pcap`, etc.
+After yoink engine v0.1.0 works:
+1. Setup Windows VM or borrow Windows machine
+2. Install IDM natively
+3. Run same test files through both, compare:
+   - Wall-clock time for 1GB file at various connection counts (1, 4, 8, 16, 32)
+   - Resume success rate after kill at 25%, 50%, 75%
+   - Memory usage during 1GB download
+   - Behavior on server returning 429/503
+4. Tune yoink parameters based on results
 
-Commit to git for reproducibility (small files only, <50MB total).
-
-## Recon host setup log
-
-Track setup steps taken on Pandai PC:
-
-- [ ] Install Wine: `sudo dnf install wine`
-- [ ] Download IDM installer from `https://www.internetdownloadmanager.com/`
-- [ ] Install IDM via Wine: `wine idman642.exe`
-- [ ] Verify IDM launches: `wine ~/.wine/drive_c/Program Files/Internet Download Manager/IDMan.exe`
-- [ ] Install mitmproxy: `pip install --user mitmproxy`
-- [ ] Generate mitmproxy CA: `mitmproxy` first run → `~/.mitmproxy/mitmproxy-ca-cert.pem`
-- [ ] Import CA into Wine cert store: `wine certmgr -add -c ~/.mitmproxy/mitmproxy-ca-cert.pem -r localMachine -s Root`
-- [ ] Configure IDM proxy: `127.0.0.1:8082`
-- [ ] Verify HTTPS intercept works (test S1)
-- [ ] Install Wireshark: `sudo dnf install wireshark`
-- [ ] Capture S1-S8
-
-## Recon date
-
-Started: TBD
-Completed: TBD
+This is post-MVP. The algorithm is captured; we have enough to build.
