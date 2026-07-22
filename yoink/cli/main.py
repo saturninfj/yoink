@@ -32,7 +32,15 @@ def _main(
         raise typer.Exit()
 
 
-# Register commands (side-effect imports)
-from yoink.cli.commands import download  # noqa: E402
+# Register commands (side-effect imports).
+from yoink.cli.commands import (  # noqa: E402
+    cancel,
+    download,
+    list_downloads,
+    resume,
+)
 
+app.command(name="list")(list_downloads)
 app.command()(download)
+app.command()(resume)
+app.command()(cancel)

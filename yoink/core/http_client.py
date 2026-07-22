@@ -67,15 +67,19 @@ class HttpClient:
         return self._client
 
     async def probe(self, url: str) -> ResponseInfo:
-        """Probe URL: HEAD first, fall back to GET if server refuses HEAD."""
-        assert self._client is not None
-        # Try HEAD
-        resp = await self._client.head(url)
-        if resp.status_code >= HTTP_BAD:
-            # Fallback: GET with Range: bytes=0-0 (1 byte) to interrogate
-            resp = await self._client.get(url, headers={"Range": "bytes=0-0"})
-            resp.raise_for_status()
+        """Probe URL: try Range request first (also confirms range support).
 
+        Returns Content-Length from full file (not the 1-byte response body).
+        """
+        assert self._client is not None
+        # GET with Range: bytes=0-0. Server response tells us:
+        #  - 206 + Content-Range → ranges supported, real size in `bytes 0-0/TOTAL`
+        #  - 200 OK → ranges NOT supported, size in Content-Length
+        resp = await self._client.get(url, headers={"Range": "bytes=0-0"})
+        if resp.status_code >= HTTP_BAD:
+            # Final fallback: plain HEAD (some servers refuse Range on HEAD).
+            resp = await self._client.head(url)
+        resp.raise_for_status()
         return _response_info(resp)
 
     async def stream_range(
