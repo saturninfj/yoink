@@ -15,9 +15,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import anyio
+import httpx
 
 from yoink.core.http_client import HttpClient, ResponseInfo
 from yoink.core.resume import assert_resumable
+from yoink.core.retry import RetryPolicy, retry_async
 from yoink.core.segment import Segment, SegmentStatus, split_into_segments
 from yoink.core.state import StateStore
 
@@ -27,6 +29,19 @@ MAX_CONNECTIONS = 32
 TICK_INTERVAL_SEC = 0.5
 CHECKPOINT_INTERVAL_SEC = 1.0
 DEFAULT_USER_AGENT = "yoink/0.0.1 (+https://github.com/saturninfj/yoink)"
+
+
+def httpx_error_types() -> tuple[type[BaseException], ...]:
+    """Tuple of httpx exceptions considered transient and worth retrying."""
+    return (
+        httpx.ConnectError,
+        httpx.ReadTimeout,
+        httpx.WriteTimeout,
+        httpx.PoolTimeout,
+        httpx.NetworkError,
+        httpx.RemoteProtocolError,
+        httpx.HTTPStatusError,
+    )
 
 
 def _file_is_pre_allocated(path: Path, expected_size: int) -> bool:
@@ -59,6 +74,7 @@ class DownloadEngine:
         user_agent: str | None = None,
         extra_headers: dict[str, str] | None = None,
         state_store: StateStore | None = None,
+        retry_policy: RetryPolicy | None = None,
     ) -> None:
         if not 1 <= connections <= MAX_CONNECTIONS:
             raise ValueError(f"connections must be 1-{MAX_CONNECTIONS}, got {connections}")
@@ -67,6 +83,7 @@ class DownloadEngine:
         self._user_agent = user_agent or DEFAULT_USER_AGENT
         self._extra_headers = extra_headers or {}
         self._state = state_store
+        self._retry_policy = retry_policy or RetryPolicy()
 
     def _make_client(self, max_conns: int) -> HttpClient:
         return HttpClient(
@@ -261,19 +278,34 @@ class DownloadEngine:
         seg: Segment,
         progress: _ProgressState,
     ) -> None:
-        """Download one segment's range sequentially to its file offset.
+        """Download one segment's range with retry-on-error.
 
-        Starts from seg.current_byte (set by resume) instead of seg.start_byte.
+        Retries the whole segment on transient errors (network, 5xx).
+        Each retry starts from the last persisted current_byte, not from scratch.
         """
         assert seg.current_byte is not None
-        with output.open("r+b") as f:
-            f.seek(seg.current_byte)
-            seg.status = SegmentStatus.DOWNLOADING
-            start = seg.current_byte
-            async for chunk in http.stream_range(url, start=start, end=seg.end_byte):
-                f.write(chunk)
-                seg.advance(len(chunk))
-                progress.add(len(chunk))
+
+        async def attempt() -> None:
+            with output.open("r+b") as f:
+                assert seg.current_byte is not None
+                f.seek(seg.current_byte)
+                seg.status = SegmentStatus.DOWNLOADING
+                start = seg.current_byte
+                async for chunk in http.stream_range(url, start=start, end=seg.end_byte):
+                    f.write(chunk)
+                    seg.advance(len(chunk))
+                    progress.add(len(chunk))
+
+        def on_retry(attempt_n: int, exc: BaseException, delay: float) -> None:
+            seg.retries += 1
+            seg.last_error = str(exc)
+
+        await retry_async(
+            attempt,
+            policy=self._retry_policy,
+            retry_on=httpx_error_types(),
+            on_retry=on_retry,
+        )
         seg.status = SegmentStatus.COMPLETED
 
     async def _heartbeat(

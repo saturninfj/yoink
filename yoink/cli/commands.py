@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from pathlib import Path
+from urllib.parse import urlparse
 
 import typer
 from rich.console import Console
@@ -17,7 +19,9 @@ from rich.progress import (
 )
 from rich.table import Table
 
+from yoink.auth.cookies import cookies_to_header, parse_netscape_cookie_file
 from yoink.core.engine import DownloadEngine
+from yoink.core.retry import RetryPolicy
 from yoink.core.state import StateStore
 from yoink.exceptions import YoinkError
 
@@ -40,6 +44,29 @@ def download(
         max=32,
         help="Number of parallel connections (1-32).",
     ),
+    header: list[str] = typer.Option(
+        [],
+        "--header",
+        "-H",
+        help="Extra HTTP header (repeatable). Format: 'Key: Value'.",
+    ),
+    user: str | None = typer.Option(
+        None,
+        "--user",
+        "-u",
+        help="HTTP Basic auth: 'user:password'.",
+    ),
+    cookie_jar: Path | None = typer.Option(
+        None,
+        "--cookie-jar",
+        "-b",
+        help="Netscape-format cookies.txt file.",
+    ),
+    max_retries: int = typer.Option(
+        5,
+        "--max-retries",
+        help="Max retries per segment on transient errors.",
+    ),
     ephemeral: bool = typer.Option(
         False,
         "--ephemeral",
@@ -48,7 +75,18 @@ def download(
 ) -> None:
     """Download URL with multi-segment parallel connections."""
     try:
-        asyncio.run(_download_async(url, output, connections, ephemeral))
+        asyncio.run(
+            _download_async(
+                url=url,
+                output=output,
+                connections=connections,
+                headers=_parse_headers(header),
+                user=user,
+                cookie_jar=cookie_jar,
+                max_retries=max_retries,
+                ephemeral=ephemeral,
+            )
+        )
     except YoinkError as exc:
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
@@ -57,14 +95,51 @@ def download(
         raise typer.Exit(code=130) from None
 
 
+def _parse_headers(raw: list[str]) -> dict[str, str]:
+    """Parse repeated --header args into a dict."""
+    out: dict[str, str] = {}
+    for item in raw:
+        if ":" not in item:
+            raise typer.BadParameter(f"header must be 'Key: Value', got {item!r}")
+        key, value = item.split(":", 1)
+        out[key.strip()] = value.strip()
+    return out
+
+
 async def _download_async(
+    *,
     url: str,
     output: Path | None,
     connections: int,
+    headers: dict[str, str],
+    user: str | None,
+    cookie_jar: Path | None,
+    max_retries: int,
     ephemeral: bool,
 ) -> None:
+    extra_headers = dict(headers)
+
+    if user:
+        if ":" not in user:
+            raise typer.BadParameter("--user must be 'user:password'")
+        token = base64.b64encode(user.encode()).decode()
+        extra_headers["Authorization"] = f"Basic {token}"
+
+    if cookie_jar:
+        cookies = parse_netscape_cookie_file(cookie_jar)
+        if cookies:
+            host = urlparse(url).hostname or ""
+            cookie_header = cookies_to_header(cookies, host)
+            if cookie_header:
+                extra_headers["Cookie"] = cookie_header
+
     state: StateStore | None = None if ephemeral else StateStore()
-    engine = DownloadEngine(connections=connections, state_store=state)
+    engine = DownloadEngine(
+        connections=connections,
+        state_store=state,
+        extra_headers=extra_headers,
+        retry_policy=RetryPolicy(max_retries=max_retries),
+    )
 
     info = await engine.head(url)
     if output is None:
