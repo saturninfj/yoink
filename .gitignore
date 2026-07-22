@@ -67,3 +67,17 @@ logs/
 .yoink/
 *.parts/
 *.part
+
+# secrets / env (jangan pernah commit)
+.env
+.env.*
+*.key
+*.pem
+*.p12
+credentials*.json
+# os / build
+.DS_Store
+.venv/
+dist/
+build/
+*.egg-info/
