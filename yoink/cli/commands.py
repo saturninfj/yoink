@@ -359,3 +359,105 @@ def uninstall_browser_host(
     console.print("[yellow]removed:[/yellow]")
     for path in removed:
         console.print(f"  • {path}")
+
+
+def video(
+    url: str = typer.Argument(..., help="Video page URL (YouTube, Twitter, etc.)."),
+    output: Path | None = typer.Option(
+        None, "--output", "-o", help="Output file path. Defaults to video title."
+    ),
+    format_selector: str = typer.Option(
+        "best", "--format", "-f", help="yt-dlp format selector (e.g. best, bestvideo+bestaudio)."
+    ),
+    connections: int = typer.Option(
+        8, "--connections", "-c", min=1, max=32, help="Connections per file."
+    ),
+    list_formats: bool = typer.Option(
+        False, "--list-formats", "-F", help="List available formats and exit."
+    ),
+) -> None:
+    """Download a video via yt-dlp integration (resolves URL, then yoinks it)."""
+    try:
+        asyncio.run(_video_async(url, output, format_selector, connections, list_formats))
+    except YoinkError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    except KeyboardInterrupt:
+        console.print("\n[yellow]interrupted[/yellow]")
+        raise typer.Exit(code=130) from None
+
+
+async def _video_async(
+    url: str,
+    output: Path | None,
+    format_selector: str,
+    connections: int,
+    list_formats: bool,
+) -> None:
+    from yoink.media import ytdlp  # noqa: PLC0415
+
+    if not ytdlp.is_available():
+        console.print("[red]error:[/red] yt-dlp not installed. Run: pip install 'yoink[media]'")
+        raise typer.Exit(code=1)
+
+    console.print(f"[cyan]probe[/cyan] {url} …")
+    info = await asyncio.to_thread(ytdlp.probe, url)
+    console.print(
+        f"       [bold]{info.title}[/bold]  ({info.extractor}, "
+        f"{info.duration or '?'}s, {len(info.formats)} formats)"
+    )
+
+    if list_formats:
+        table = Table(title="available formats")
+        table.add_column("ID", style="cyan")
+        table.add_column("Ext")
+        table.add_column("Res")
+        table.add_column("FPS", justify="right")
+        table.add_column("TBR", justify="right")
+        table.add_column("VC")
+        table.add_column("AC")
+        for f in info.formats:
+            table.add_row(
+                f.format_id,
+                f.ext,
+                f.resolution or "-",
+                f"{f.fps:.0f}" if f.fps else "-",
+                f"{f.tbr:.0f}" if f.tbr else "-",
+                (f.vcodec or "-")[:8],
+                (f.acodec or "-")[:8],
+            )
+        console.print(table)
+        return
+
+    console.print(f"[cyan]resolve[/cyan] format={format_selector!r} …")
+    resolved = await asyncio.to_thread(ytdlp.resolve, url, format_selector)
+    if not resolved.url:
+        console.print("[red]error:[/red] yt-dlp returned no direct URL")
+        raise typer.Exit(code=1)
+
+    if output is None:
+        output = Path(resolved.filename)
+    output = output.expanduser().resolve()
+
+    engine = DownloadEngine(connections=connections)
+    head = await engine.head(resolved.url)
+    total = head.total_size or 0
+    console.print(
+        f"[cyan]yoink[/cyan] {resolved.url[:80]}…  "
+        f"({total / 1_000_000:.1f} MB, {connections} conns)"
+    )
+    console.print(f"       → {output}")
+
+    with Progress(
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        DownloadColumn(),
+        TransferSpeedColumn(),
+        TimeRemainingColumn(),
+        console=console,
+    ) as progress:
+        task_id = progress.add_task("downloading", total=total or None)
+        async for tick in engine.stream(resolved.url, output):
+            progress.update(task_id, completed=tick.downloaded)
+
+    console.print(f"[green]done[/green] {output}")

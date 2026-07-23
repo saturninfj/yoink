@@ -41,6 +41,7 @@ from yoink.cli.commands import (  # noqa: E402
     list_downloads,
     resume,
     uninstall_browser_host,
+    video,
 )
 
 app.command(name="list")(list_downloads)
@@ -50,3 +51,4 @@ app.command()(cancel)
 app.command()(daemon)
 app.command(name="install-browser-host")(install_browser_host)
 app.command(name="uninstall-browser-host")(uninstall_browser_host)
+app.command()(video)
