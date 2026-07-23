@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "yoink",
+  "version": "0.1.0",
+  "description": "Multi-segment HTTP download manager. OSS alternative to IDM.",
+  "permissions": [
+    "downloads",
+    "nativeMessaging",
+    "storage",
+    "activeTab",
+    "notifications"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "yoink"
+  },
+  "options_page": "options/options.html",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
+}

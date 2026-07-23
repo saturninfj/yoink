@@ -101,13 +101,21 @@ class DownloadEngine:
         self,
         url: str,
         output: Path,
+        *,
+        download_id: int | None = None,
+        segments: list[Segment] | None = None,
+        info: ResponseInfo | None = None,
     ) -> AsyncIterator[DownloadTick]:
         """Fresh download to output path. Yields progress ticks.
 
         If state_store was provided, registers the download and checkpoints
         progress every ~1s so it can be resumed via `resume(download_id)`.
+
+        Pre-allocated state (download_id + segments + info) can be passed in
+        for use by callers that need the id synchronously (e.g. native host).
         """
-        info = await self.head(url)
+        if info is None:
+            info = await self.head(url)
 
         if info.total_size is None or info.total_size == 0:
             async for tick in self._stream_unknown_size(url, output, info):
@@ -123,10 +131,29 @@ class DownloadEngine:
             url=url,
             output=output,
             info=info,
-            download_id=None,
-            segments=None,
+            download_id=download_id,
+            segments=segments,
         ):
             yield tick
+
+    async def prepare(
+        self,
+        url: str,
+        output: Path,
+    ) -> tuple[int, list[Segment], ResponseInfo]:
+        """Probe URL + pre-register download state. Returns (id, segments, info).
+
+        Use this when you need the download_id synchronously before streaming.
+        Then pass the returned values to `stream()` to continue.
+        """
+        info = await self.head(url)
+        if self._state is None or not info.total_size or not info.accepts_ranges:
+            return -1, [], info
+        n_conns = min(self._connections, info.total_size)
+        segments = split_into_segments(total_size=info.total_size, n_segments=n_conns)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        download_id = self._register_download(url=url, info=info, output=output, segments=segments)
+        return download_id, segments, info
 
     async def resume(self, download_id: int) -> AsyncIterator[DownloadTick]:
         """Resume a previously checkpointed download by ID.

@@ -35,12 +35,18 @@ def _main(
 # Register commands (side-effect imports).
 from yoink.cli.commands import (  # noqa: E402
     cancel,
+    daemon,
     download,
+    install_browser_host,
     list_downloads,
     resume,
+    uninstall_browser_host,
 )
 
 app.command(name="list")(list_downloads)
 app.command()(download)
 app.command()(resume)
 app.command()(cancel)
+app.command()(daemon)
+app.command(name="install-browser-host")(install_browser_host)
+app.command(name="uninstall-browser-host")(uninstall_browser_host)

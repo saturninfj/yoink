@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>yoink</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>yoink</h1>
+      <button id="refresh" title="refresh">⟳</button>
+    </header>
+
+    <section id="host-status">
+      <span id="host-dot" class="dot unknown"></span>
+      <span id="host-label">checking host…</span>
+    </section>
+
+    <form id="add-form">
+      <input
+        type="url"
+        id="url-input"
+        placeholder="https://example.com/big-file.zip"
+        required
+        autofocus
+      />
+      <button type="submit" title="start download">yoink it</button>
+    </form>
+
+    <ul id="downloads"></ul>
+
+    <footer>
+      <a id="open-options" href="#">settings</a>
+    </footer>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

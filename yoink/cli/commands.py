@@ -293,3 +293,69 @@ def cancel(
             else:
                 console.print(f"[red]error:[/red] #{download_id} not in a cancellable state")
                 raise typer.Exit(code=1)
+
+
+def daemon() -> None:
+    """Run the native messaging host (stdio JSON-RPC). Invoked by browsers."""
+    from yoink.browser.native_host import main as host_main  # noqa: PLC0415
+
+    host_main()
+
+
+def install_browser_host(
+    browser: str = typer.Option(
+        "chrome", "--browser", "-b", help="chrome, brave, edge, firefox, chromium."
+    ),
+    extension_id: list[str] = typer.Option(
+        [],
+        "--extension-id",
+        help="Browser extension ID allowed to talk to host (repeatable).",
+    ),
+    python_bin: Path = typer.Option(
+        Path("/usr/bin/env python3"),
+        "--python",
+        help="Python interpreter to invoke from the host wrapper.",
+    ),
+) -> None:
+    """Install the native messaging host manifest for browser integration."""
+    from yoink.browser.install import install_host  # noqa: PLC0415
+
+    if not extension_id:
+        console.print(
+            "[yellow]hint:[/yellow] no --extension-id given; manifest will allow any "
+            "extension origin (dev mode only)."
+        )
+
+    try:
+        written = install_host(
+            python_bin=python_bin,
+            browser=browser,
+            extension_ids=extension_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]error:[/red] install failed: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print("[green]installed native host:[/green]")
+    for path in written:
+        console.print(f"  • {path}")
+    console.print(
+        f"\n[cyan]next:[/cyan] load the extension in {browser} (unpacked), then test via the popup."
+    )
+
+
+def uninstall_browser_host(
+    browser: str = typer.Option(
+        "chrome", "--browser", "-b", help="chrome, brave, edge, firefox, chromium."
+    ),
+) -> None:
+    """Remove the native messaging host manifest(s)."""
+    from yoink.browser.install import uninstall_host  # noqa: PLC0415
+
+    removed = uninstall_host(browser=browser)
+    if not removed:
+        console.print("[dim]no manifest files found[/dim]")
+        return
+    console.print("[yellow]removed:[/yellow]")
+    for path in removed:
+        console.print(f"  • {path}")

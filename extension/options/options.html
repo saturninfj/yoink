@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>yoink settings</title>
+    <style>
+      body {
+        font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+        max-width: 600px;
+        margin: 24px auto;
+        padding: 0 16px;
+        color: #1f2328;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0 0 16px;
+      }
+      label {
+        display: block;
+        margin: 12px 0 4px;
+        font-weight: 500;
+      }
+      input[type="text"],
+      input[type="number"],
+      select {
+        width: 100%;
+        padding: 6px 8px;
+        border: 1px solid #d0d7de;
+        border-radius: 6px;
+        font: inherit;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .row input[type="checkbox"] {
+        margin: 0;
+      }
+      .help {
+        color: #57606a;
+        font-size: 12px;
+        margin-top: 4px;
+      }
+      button {
+        margin-top: 16px;
+        padding: 8px 16px;
+        background: #1f6feb;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        font: inherit;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #1f5feb;
+      }
+      .saved {
+        color: #1a7f37;
+        margin-top: 8px;
+        opacity: 0;
+        transition: opacity 0.3s;
+      }
+      .saved.show {
+        opacity: 1;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>yoink settings</h1>
+
+    <div class="row">
+      <input type="checkbox" id="interceptDownloads" />
+      <label for="interceptDownloads">Intercept browser downloads</label>
+    </div>
+    <p class="help">
+      When on, downloads triggered by the browser are cancelled and routed through
+      the yoink native host instead. Off by default — turn on to get IDM-like
+      behaviour.
+    </p>
+
+    <label for="connections">Default connections</label>
+    <input type="number" id="connections" min="1" max="32" value="8" />
+    <p class="help">Number of parallel connections per download (1-32).</p>
+
+    <label for="outputDir">Default output directory</label>
+    <input type="text" id="outputDir" placeholder="/Users/you/Downloads" />
+    <p class="help">
+      Optional absolute path. If empty, the host uses <code>~/Downloads</code>.
+    </p>
+
+    <button id="save">Save</button>
+    <div class="saved" id="saved">saved ✓</div>
+
+    <script src="options.js"></script>
+  </body>
+</html>
